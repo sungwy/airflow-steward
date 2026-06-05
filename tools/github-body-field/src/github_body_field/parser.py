@@ -36,6 +36,7 @@ The parser is a small state machine that:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -72,6 +73,47 @@ class _Section:
 def _is_fence(line: str) -> bool:
     stripped = line.lstrip()
     return stripped.startswith(_BACKTICK_FENCE) or stripped.startswith(_TILDE_FENCE)
+
+
+# A "trailer" is a block appended *after* the issue-form fields — a
+# rendered `<details>` attachment (e.g. a "Recommended fix" disclosure)
+# or an HTML-comment-delimited block (e.g. the generate-cve-json record,
+# wrapped in `<!-- generate-cve-json: … -->` markers). The last field's
+# value otherwise runs to end-of-body, so without special handling these
+# trailers get absorbed into that field and clobbered on rewrite. We
+# detect a trailer by its opening line at column 0: a `<details>` tag or
+# an HTML comment opener.
+_TRAILER_LINE_RE = re.compile(r"^(?:<details(?:\s|>)|<!--)")
+
+
+def _trailer_start_index(body_lines: list[str]) -> int | None:
+    """Index of the first top-level trailer-block line in ``body_lines``,
+    or ``None`` if there is none.
+
+    Fence-aware: a `<details>` / `<!--` inside a fenced code sample is
+    ignored so it can't be mistaken for a trailer. Intended only for the
+    body's **last** section, where the field value would otherwise extend
+    to end-of-body and swallow any appended trailer block.
+    """
+    in_fence = False
+    for i, line in enumerate(body_lines):
+        if _is_fence(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence and _TRAILER_LINE_RE.match(line):
+            return i
+    return None
+
+
+def _split_value_and_trailer(body_lines: list[str]) -> tuple[list[str], list[str]]:
+    """Split a (last-section) ``body_lines`` into its field value and any
+    trailing trailer block(s). Returns ``(value_lines, trailer_lines)``;
+    ``trailer_lines`` is empty when there is no trailer.
+    """
+    idx = _trailer_start_index(body_lines)
+    if idx is None:
+        return list(body_lines), []
+    return list(body_lines[:idx]), list(body_lines[idx:])
 
 
 def _parse(body: str) -> tuple[list[str], list[_Section]]:
@@ -151,12 +193,17 @@ def extract_field(body: str, field: str) -> str:
     or appears more than once.
     """
     _, sections = _parse(body)
-    matches = [s for s in sections if s.name == field]
-    if not matches:
+    indices = [i for i, s in enumerate(sections) if s.name == field]
+    if not indices:
         raise FieldNotFoundError(f"field not found: {field!r}")
-    if len(matches) > 1:
-        raise FieldNotFoundError(f"field {field!r} appears {len(matches)} times; refusing to guess")
-    _, stripped, _ = _strip_spacer_blanks(matches[0].body_lines)
+    if len(indices) > 1:
+        raise FieldNotFoundError(f"field {field!r} appears {len(indices)} times; refusing to guess")
+    body_lines = sections[indices[0]].body_lines
+    # On the last section the value runs to end-of-body; drop any
+    # appended trailer block so the returned value is just the field.
+    if indices[0] == len(sections) - 1:
+        body_lines, _ = _split_value_and_trailer(body_lines)
+    _, stripped, _ = _strip_spacer_blanks(body_lines)
     return "".join(stripped)
 
 
@@ -189,8 +236,21 @@ def replace_field(body: str, field: str, new_value: str) -> str:
 
     target_idx = indices[0]
     target = sections[target_idx]
-    had_leading, _, had_trailing = _strip_spacer_blanks(target.body_lines)
     is_last_section = target_idx == len(sections) - 1
+
+    # On the last section, separate the field value from any appended
+    # trailer block(s) (`<details>` / HTML-comment) so the rewrite
+    # replaces only the value and re-emits the trailer verbatim. On
+    # non-last sections the next heading already bounds the value.
+    if is_last_section:
+        value_lines, trailer_lines = _split_value_and_trailer(target.body_lines)
+    else:
+        value_lines, trailer_lines = list(target.body_lines), []
+    had_leading, _, had_trailing = _strip_spacer_blanks(value_lines)
+    # The value behaves as the body's tail only when it is the last
+    # section AND nothing trails it; a preserved trailer needs a spacer
+    # before it, like an interior section.
+    value_is_tail = is_last_section and not trailer_lines
 
     # Normalise the caller-supplied value:
     #   - strip any trailing blank-line spacer they may have
@@ -212,17 +272,19 @@ def replace_field(body: str, field: str, new_value: str) -> str:
         if had_leading:
             rebuilt_body_lines.append("\n")
         rebuilt_body_lines.extend(normalised.splitlines(keepends=True))
-        if had_trailing and not is_last_section:
+        if had_trailing and not value_is_tail:
             rebuilt_body_lines.append("\n")
     else:
         # Empty value: collapse to a single blank-line spacer so the
-        # next heading isn't glued to the current one. Don't stack
-        # both leading and trailing spacers (that would render as
-        # two blank lines, which reads worse than one in the tracker
-        # UI). For the last section, emit nothing — the bare heading
-        # line is sufficient.
-        if not is_last_section and (had_leading or had_trailing):
+        # next heading (or trailer) isn't glued to the current one.
+        # Don't stack both leading and trailing spacers (that would
+        # render as two blank lines, which reads worse than one in the
+        # tracker UI). For the body's tail, emit nothing — the bare
+        # heading line is sufficient.
+        if not value_is_tail and (had_leading or had_trailing):
             rebuilt_body_lines.append("\n")
+    # Re-emit any preserved trailer block verbatim after the value.
+    rebuilt_body_lines.extend(trailer_lines)
 
     rebuilt_sections = [
         _Section(name=s.name, heading_line=s.heading_line, body_lines=s.body_lines) for s in sections

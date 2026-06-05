@@ -247,3 +247,101 @@ def test_replace_field_field_with_no_spacer_before_next_heading():
     new = replace_field(body, "A", "new1\n")
     # No spacer originally → don't invent one.
     assert new == "### A\nnew1\n### B\nv2\n"
+
+
+# ---------------------------------------------------------------------------
+# trailer preservation on the last field (the clobbering fix)
+# ---------------------------------------------------------------------------
+
+# Mirrors a real tracker body: the last form field (`CVE tool link`) is
+# followed by a `<details>` "Recommended fix" disclosure and an
+# HTML-comment-delimited generate-cve-json record. Both are trailers that
+# belong to the issue, not to the last field.
+BODY_WITH_TRAILER = (
+    "### Severity\n"
+    "\n"
+    "HIGH\n"
+    "\n"
+    "### CVE tool link\n"
+    "\n"
+    "_No response_\n"
+    "\n"
+    "<details><summary>Recommended fix (per the source markdown)</summary>\n"
+    "\n"
+    "Stop accepting bananas.\n"
+    "\n"
+    "</details>\n"
+    "\n"
+    "<!-- generate-cve-json: cve=CVE-2026-90001 version=v1 -->\n"
+    "```json\n"
+    '{"cveId": "CVE-2026-90001"}\n'
+    "```\n"
+    "<!-- generate-cve-json:end cve=CVE-2026-90001 version=v1 -->\n"
+)
+
+
+def test_extract_last_field_ignores_trailer():
+    # The value is just `_No response_`, not the trailing details/JSON.
+    assert extract_field(BODY_WITH_TRAILER, "CVE tool link") == "_No response_\n"
+
+
+def test_replace_last_field_preserves_details_trailer():
+    new = replace_field(
+        BODY_WITH_TRAILER, "CVE tool link", "https://cveprocess.apache.org/cve5/CVE-2026-90001"
+    )
+    # The value was rewritten…
+    assert "### CVE tool link\n\nhttps://cveprocess.apache.org/cve5/CVE-2026-90001\n\n" in new
+    assert "_No response_" not in new
+    # …and BOTH trailers survived byte-exact.
+    assert "<details><summary>Recommended fix (per the source markdown)</summary>" in new
+    assert "Stop accepting bananas." in new
+    assert "<!-- generate-cve-json: cve=CVE-2026-90001 version=v1 -->" in new
+    assert '{"cveId": "CVE-2026-90001"}' in new
+    assert new.endswith("<!-- generate-cve-json:end cve=CVE-2026-90001 version=v1 -->\n")
+    # Earlier section untouched.
+    assert "### Severity\n\nHIGH\n\n" in new
+
+
+def test_replace_last_field_value_then_trailer_spacing_is_single_blank():
+    new = replace_field(BODY_WITH_TRAILER, "CVE tool link", "X")
+    # Exactly one blank line between the new value and the trailer.
+    assert "### CVE tool link\n\nX\n\n<details>" in new
+
+
+def test_replace_last_field_empty_value_keeps_trailer():
+    new = replace_field(BODY_WITH_TRAILER, "CVE tool link", "")
+    # Empty value collapses to a single spacer, trailer preserved.
+    assert "### CVE tool link\n\n<details><summary>Recommended fix" in new
+    assert "<!-- generate-cve-json: cve=CVE-2026-90001 version=v1 -->" in new
+
+
+def test_trailer_inside_code_fence_is_not_treated_as_trailer():
+    # A `<details>` that lives *inside* the last field's fenced code
+    # block is genuine field content, not a trailer — it must be
+    # replaced along with the rest of the value.
+    body = (
+        "### Notes\n"
+        "\n"
+        "real value\n"
+        "\n"
+        "```html\n"
+        "<details>not a trailer — inside a fence</details>\n"
+        "```\n"
+    )
+    new = replace_field(body, "Notes", "new value\n")
+    assert new == "### Notes\n\nnew value\n"
+    assert "not a trailer" not in new
+
+
+def test_list_fields_unaffected_by_trailer():
+    # Trailers are not headings, so field discovery is unchanged.
+    assert list_fields(BODY_WITH_TRAILER) == ["Severity", "CVE tool link"]
+
+
+def test_replace_non_last_field_with_trailer_present_is_byte_exact_elsewhere():
+    # Replacing a non-last field must leave the last field + its
+    # trailers completely untouched.
+    new = replace_field(BODY_WITH_TRAILER, "Severity", "LOW\n")
+    assert "### Severity\n\nLOW\n\n" in new
+    assert "### CVE tool link\n\n_No response_\n\n<details>" in new
+    assert new.endswith("<!-- generate-cve-json:end cve=CVE-2026-90001 version=v1 -->\n")

@@ -83,6 +83,17 @@ The parser is a small state machine that:
 - tracks fenced code blocks (`` ``` `` and `~~~`) so a literal
   `### foo` inside a shell snippet never false-matches as a
   heading;
+- treats a trailing `<details>` block or HTML-comment-delimited
+  block (e.g. a "Recommended fix" disclosure, or the
+  generate-cve-json record wrapped in `<!-- generate-cve-json: …
+  -->` markers) appended after the **last** field as a *body
+  trailer*, not part of that field. `get` returns only the field
+  value, and `set` rewrites the value while re-emitting the
+  trailer verbatim — without this, the last field's value runs to
+  end-of-body and a rewrite would clobber the trailer. (Trailers
+  inside a code fence are ignored; trailers only matter for the
+  last field, since interior fields are already bounded by the
+  next `### ` heading.)
 - preserves the original body byte-exact when no change is needed
   (idempotent rewrite — a `set` of the same value triggers no
   API write).

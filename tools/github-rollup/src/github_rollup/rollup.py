@@ -29,17 +29,45 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# First line of any rollup comment. The trailing space is intentional —
-# the comment ends with ` -->` and matching just the prefix lets the
-# detector survive minor edits to the marker tail (e.g. a future
-# `airflow-s status rollup v2 — ...` bump).
+# Kept for backward compatibility: the slug baked into the default-
+# written marker (`build_new_rollup_body` with no override). Detection no
+# longer keys off this literal — see `is_rollup_marker` below.
 ROLLUP_MARKER_PREFIX = "<!-- airflow-s status rollup v"
 
-# Full first-line marker the tool writes when creating a new rollup.
-# Matches what every existing skill emits.
+# Slug-agnostic detector. A rollup marker is `<!-- <slug> status rollup
+# v<N> … -->` for *any* adopter slug — `airflow-s`, `myorg/myrepo`, etc.
+# Keying detection off the literal `airflow-s` meant any other adopter's
+# marker went unrecognised, so `append` created a *second* rollup comment
+# instead of folding into the existing one. This regex matches the shape,
+# not the reference adopter's name, while still matching every legacy
+# `airflow-s` marker.
+_ROLLUP_MARKER_RE = re.compile(r"^<!--\s+\S.*?\bstatus rollup v\d+\b", re.IGNORECASE)
+
+# Full first-line marker the tool writes when creating a new rollup with
+# no explicit slug. Matches what every existing skill emits.
 _DEFAULT_MARKER_LINE = (
     "<!-- airflow-s status rollup v1 — all bot-authored status updates fold into this single comment. -->"
 )
+
+
+def is_rollup_marker(text: str) -> bool:
+    """True if ``text`` (a full comment body or just its first line)
+    opens with a status-rollup marker, regardless of the adopter slug.
+
+    Use this instead of ``startswith(ROLLUP_MARKER_PREFIX)`` so a rollup
+    written by a non-``airflow-s`` adopter (or hand-authored with the
+    adopter's own slug) is still recognised — otherwise ``append``
+    creates a duplicate rollup comment.
+    """
+    first_line = text.split("\n", 1)[0]
+    return bool(_ROLLUP_MARKER_RE.match(first_line))
+
+
+def build_marker_line(slug: str) -> str:
+    """Compose a rollup marker line for ``slug`` (e.g. an adopter's
+    ``owner/repo``). Detection (:func:`is_rollup_marker`) is slug-
+    agnostic, so any slug round-trips."""
+    return f"<!-- {slug} status rollup v1 — all bot-authored status updates fold into this single comment. -->"
 
 # Between consecutive `<details>` entries we always write exactly one
 # blank line, a horizontal rule, and one blank line. Keeping this as
@@ -99,8 +127,9 @@ def iter_entries(rollup_body: str) -> list[RollupEntry]:
     """
     text = rollup_body
     # Drop the marker line if present so the regex doesn't false-match
-    # the marker's HTML-comment content.
-    if text.startswith(ROLLUP_MARKER_PREFIX):
+    # the marker's HTML-comment content. Slug-agnostic: any adopter's
+    # marker, not just `airflow-s`.
+    if is_rollup_marker(text):
         nl = text.find("\n")
         text = text[nl + 1 :] if nl != -1 else ""
 
@@ -151,11 +180,15 @@ def build_entry(*, date: str, user: str, action: str, body: str) -> str:
     return f"<details><summary>{summary}</summary>\n\n{body_stripped}\n\n{_CLOSE_TAG}"
 
 
-def build_new_rollup_body(entry: str) -> str:
+def build_new_rollup_body(entry: str, marker_line: str | None = None) -> str:
     """Compose a brand-new rollup comment body wrapping the first
     entry. Use when no rollup comment exists yet on the tracker.
+
+    ``marker_line`` lets an adopter write a marker carrying its own slug
+    (see :func:`build_marker_line`); when omitted the canonical
+    ``airflow-s`` default is used for backward compatibility.
     """
-    return f"{_DEFAULT_MARKER_LINE}\n{entry}"
+    return f"{marker_line or _DEFAULT_MARKER_LINE}\n{entry}"
 
 
 def rebuild_with_appended_entry(existing_body: str, new_entry: str) -> str:

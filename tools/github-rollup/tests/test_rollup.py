@@ -21,7 +21,9 @@ import pytest
 from github_rollup.rollup import (
     ROLLUP_MARKER_PREFIX,
     build_entry,
+    build_marker_line,
     build_new_rollup_body,
+    is_rollup_marker,
     iter_entries,
     parse_summary_line,
     rebuild_with_appended_entry,
@@ -238,3 +240,61 @@ def test_round_trip_three_appends_keeps_count():
             build_entry(date=f"2026-05-0{i}", user="@a", action=action, body=f"b{i}"),
         )
     assert [e.action for e in iter_entries(existing)] == ["x1", "x2", "x3"]
+
+
+# ---------------------------------------------------------------------------
+# is_rollup_marker — slug-agnostic detection (the duplicate-rollup fix)
+# ---------------------------------------------------------------------------
+
+
+def test_is_rollup_marker_recognises_default_airflow_s_marker():
+    assert is_rollup_marker(MARKER_LINE)
+
+
+def test_is_rollup_marker_recognises_other_adopter_slug():
+    # Regression: a non-airflow-s adopter's marker must be recognised so
+    # `append` folds into it instead of creating a duplicate rollup.
+    other = "<!-- sungwy/magpie-test status rollup v1 — all bot-authored status updates fold into this single comment. -->"
+    assert is_rollup_marker(other)
+
+
+def test_is_rollup_marker_recognises_version_bump():
+    assert is_rollup_marker("<!-- myorg/myrepo status rollup v2 — anything here -->")
+
+
+def test_is_rollup_marker_works_on_full_body_not_just_first_line():
+    body = f"{build_marker_line('acme/sec')}\n<details><summary>2026-05-30 · @a · x</summary>\n\nb\n\n</details>"
+    assert is_rollup_marker(body)
+
+
+def test_is_rollup_marker_rejects_non_marker_comment():
+    assert not is_rollup_marker("<!-- generate-cve-json: cve=CVE-2026-1 -->")
+    assert not is_rollup_marker("<!-- a preamble comment from the issue template -->")
+    assert not is_rollup_marker("just some text\nwith two lines")
+
+
+def test_iter_entries_strips_non_airflow_s_marker_line():
+    # The marker line of any adopter must be stripped before entry
+    # parsing, so a foreign-slug rollup parses its entries correctly.
+    body = (
+        f"{build_marker_line('sungwy/magpie-test')}\n"
+        "<details><summary>2026-05-30 · @a · Import</summary>\n\nbody.\n\n</details>"
+    )
+    entries = iter_entries(body)
+    assert len(entries) == 1
+    assert entries[0].action == "Import"
+
+
+def test_build_marker_line_round_trips_through_detector():
+    line = build_marker_line("foo/bar-baz")
+    assert is_rollup_marker(line)
+    assert line.startswith("<!-- foo/bar-baz status rollup v1")
+
+
+def test_build_new_rollup_body_with_custom_marker():
+    entry = build_entry(date="2026-05-30", user="@a", action="b", body="c")
+    body = build_new_rollup_body(entry, marker_line=build_marker_line("x/y"))
+    assert body.startswith("<!-- x/y status rollup v1")
+    assert is_rollup_marker(body)
+    first_nl = body.find("\n")
+    assert body[first_nl + 1 :].startswith("<details>")

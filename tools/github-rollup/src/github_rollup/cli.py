@@ -34,9 +34,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from github_rollup.rollup import (
-    ROLLUP_MARKER_PREFIX,
     build_entry,
+    build_marker_line,
     build_new_rollup_body,
+    is_rollup_marker,
     iter_entries,
     rebuild_with_appended_entry,
 )
@@ -114,7 +115,7 @@ def _find_rollup(comments: list[dict]) -> dict | None:
     marker, or None if no rollup exists on the issue."""
     for c in comments:
         body = c.get("body") or ""
-        if body.startswith(ROLLUP_MARKER_PREFIX):
+        if is_rollup_marker(body):
             return c
     return None
 
@@ -173,8 +174,10 @@ def _cmd_append(args: argparse.Namespace) -> int:
         return 0
 
     if rollup is None:
-        # Create.
-        new_body = build_new_rollup_body(entry)
+        # Create. An adopter may pass --marker-slug to stamp the rollup
+        # with its own slug; otherwise the canonical default is used.
+        marker_line = build_marker_line(args.marker_slug) if args.marker_slug else None
+        new_body = build_new_rollup_body(entry, marker_line=marker_line)
         _gh_post_comment(args.issue, repo, new_body)
         sys.stderr.write(f"created rollup on {repo}#{args.issue} ({args.action!r}, date={date})\n")
         return 0
@@ -256,6 +259,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_append.add_argument(
         "--now",
         help="ISO-8601 timestamp; the date field is derived from this. Default: real now.",
+    )
+    p_append.add_argument(
+        "--marker-slug",
+        help=(
+            "slug to stamp into a newly-created rollup marker "
+            "(e.g. 'myorg/myrepo'). Detection is slug-agnostic, so this "
+            "is purely cosmetic; omit to use the default marker. Ignored "
+            "when a rollup already exists."
+        ),
     )
     p_append.add_argument(
         "--dry-run",

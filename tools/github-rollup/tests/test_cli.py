@@ -50,9 +50,10 @@ class FakeGh:
     """Records every `gh` call and returns canned output for each
     pattern. Tests assert on the recorded calls."""
 
-    def __init__(self, has_rollup: bool = True) -> None:
+    def __init__(self, has_rollup: bool = True, rollup_body: str = ROLLUP_BODY) -> None:
         self.calls: list[tuple[list[str], str | None]] = []
         self.has_rollup = has_rollup
+        self.rollup_body = rollup_body
         # Track the last patched body so tests can verify what we
         # actually wrote.
         self.patched_body: str | None = None
@@ -77,7 +78,7 @@ class FakeGh:
                 comments.append(
                     {
                         "id": "IC_NODEID",
-                        "body": ROLLUP_BODY,
+                        "body": self.rollup_body,
                         "url": "https://github.com/o/r/issues/1#issuecomment-1",
                     }
                 )
@@ -275,6 +276,77 @@ def test_append_dry_run_signals_create_path(
     assert rc == 0
     err = capsys.readouterr().err
     assert "CREATE" in err
+
+
+# ---------------------------------------------------------------------------
+# append — adopter-neutral marker (the duplicate-rollup fix)
+# ---------------------------------------------------------------------------
+
+FOREIGN_ROLLUP_BODY = (
+    "<!-- sungwy/magpie-test status rollup v1 — all bot-authored status updates fold into this single comment. -->\n"
+    "<details><summary>2026-05-28 · @sungwy · Import</summary>\n\n"
+    "Imported from markdown.\n\n"
+    "</details>"
+)
+
+
+def test_append_folds_into_foreign_slug_rollup_instead_of_duplicating(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: a rollup whose marker carries a non-airflow-s slug
+    must be recognised, so `append` PATCHes it rather than POSTing a
+    second rollup comment (the duplicate bug)."""
+    f = FakeGh(has_rollup=True, rollup_body=FOREIGN_ROLLUP_BODY)
+    monkeypatch.setattr(subprocess, "run", f)
+    rc = cli.main(
+        [
+            "--repo",
+            "sungwy/magpie-test",
+            "append",
+            "1",
+            "--action",
+            "CVE allocated",
+            "--entry-body",
+            "Allocated CVE-2026-90001.",
+            "--now",
+            "2026-06-05T12:00:00Z",
+        ]
+    )
+    assert rc == 0
+    # Appended (PATCH), not created (POST).
+    assert f.patched_body is not None
+    assert f.posted_body is None
+    assert "Import" in f.patched_body
+    assert "CVE allocated" in f.patched_body
+    # The foreign marker is preserved (not rewritten to airflow-s).
+    assert f.patched_body.startswith("<!-- sungwy/magpie-test status rollup v1")
+    assert "appended to rollup" in capsys.readouterr().err
+
+
+def test_append_create_with_marker_slug_stamps_custom_marker(
+    fake_gh_no_rollup: FakeGh, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli.main(
+        [
+            "--repo",
+            "sungwy/magpie-test",
+            "append",
+            "1",
+            "--action",
+            "Import",
+            "--entry-body",
+            "x",
+            "--now",
+            "2026-06-05T12:00:00Z",
+            "--marker-slug",
+            "sungwy/magpie-test",
+        ]
+    )
+    assert rc == 0
+    body = fake_gh_no_rollup.posted_body
+    assert body is not None
+    assert body.startswith("<!-- sungwy/magpie-test status rollup v1")
+    assert "created rollup" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

@@ -59,8 +59,19 @@ Optional flags:
   (default: the authenticated `gh` user from `gh api user`).
 - `--now <ISO8601>` — override the date used in the summary
   (default: real now). Useful for deterministic replay tests.
+- `--marker-slug <slug>` — slug to stamp into a *newly created*
+  rollup's marker line, e.g. `myorg/myrepo`. Detection is
+  slug-agnostic (see below), so this is purely cosmetic; omit to
+  use the default marker. Ignored when a rollup already exists.
 - `--dry-run` — print the decision (create vs append) without
   writing.
+
+**Adopter-neutral marker detection.** A rollup comment is
+recognised by the shape `<!-- <slug> status rollup v<N> … -->`
+for *any* adopter slug, not just the reference `airflow-s`. This
+means a rollup created (or hand-authored) with a different slug is
+still found and appended to, rather than triggering a duplicate
+rollup comment.
 
 ### `list <issue>`
 

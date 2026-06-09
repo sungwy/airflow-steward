@@ -16,20 +16,22 @@
 # under the License.
 from github_rollup.cli import main
 from github_rollup.rollup import (
-    ROLLUP_MARKER_PREFIX,
     RollupEntry,
     build_entry,
+    build_marker_line,
     build_new_rollup_body,
+    is_rollup_marker,
     iter_entries,
     parse_summary_line,
     rebuild_with_appended_entry,
 )
 
 __all__ = [
-    "ROLLUP_MARKER_PREFIX",
     "RollupEntry",
     "build_entry",
+    "build_marker_line",
     "build_new_rollup_body",
+    "is_rollup_marker",
     "iter_entries",
     "main",
     "parse_summary_line",

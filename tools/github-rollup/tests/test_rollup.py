@@ -19,7 +19,6 @@ from __future__ import annotations
 import pytest
 
 from github_rollup.rollup import (
-    ROLLUP_MARKER_PREFIX,
     build_entry,
     build_marker_line,
     build_new_rollup_body,
@@ -197,7 +196,7 @@ def test_build_entry_strips_body_whitespace():
 def test_build_new_rollup_body_includes_marker_first():
     entry = build_entry(date="2026-05-30", user="@a", action="b", body="c")
     body = build_new_rollup_body(entry)
-    assert body.startswith(ROLLUP_MARKER_PREFIX)
+    assert is_rollup_marker(body)
     assert "<details>" in body
     # Marker line + immediately the entry — no blank line gap.
     first_nl = body.find("\n")

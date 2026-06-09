@@ -29,11 +29,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Kept for backward compatibility: the slug baked into the default-
-# written marker (`build_new_rollup_body` with no override). Detection no
-# longer keys off this literal — see `is_rollup_marker` below.
-ROLLUP_MARKER_PREFIX = "<!-- airflow-s status rollup v"
-
 # Slug-agnostic detector. A rollup marker is `<!-- <slug> status rollup
 # v<N> … -->` for *any* adopter slug — `airflow-s`, `myorg/myrepo`, etc.
 # Keying detection off the literal `airflow-s` meant any other adopter's
@@ -54,10 +49,10 @@ def is_rollup_marker(text: str) -> bool:
     """True if ``text`` (a full comment body or just its first line)
     opens with a status-rollup marker, regardless of the adopter slug.
 
-    Use this instead of ``startswith(ROLLUP_MARKER_PREFIX)`` so a rollup
-    written by a non-``airflow-s`` adopter (or hand-authored with the
-    adopter's own slug) is still recognised — otherwise ``append``
-    creates a duplicate rollup comment.
+    Detection matches the marker *shape*, not any single adopter's slug,
+    so a rollup written by a non-``airflow-s`` adopter (or hand-authored
+    with the adopter's own slug) is still recognised — otherwise
+    ``append`` creates a duplicate rollup comment.
     """
     first_line = text.split("\n", 1)[0]
     return bool(_ROLLUP_MARKER_RE.match(first_line))
